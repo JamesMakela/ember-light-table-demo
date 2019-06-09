@@ -189,7 +189,70 @@ installing component-test
   create tests/integration/components/simple-table-test.js
 ```
 
+And then we edit the files as shown.
+
+**app/templates/components/simple-table.hbs:**
+```html
+{{#light-table table height="65vh" as |t|}}
+  {{t.head
+    onColumnClick=(action "onColumnClick")
+    iconSortable="fa fa-sort"
+    iconAscending="fa fa-sort-asc"
+    iconDescending="fa fa-sort-desc"
+    fixed=true
+  }}
+
+  {{#t.body
+    canSelect=false
+    onScrolledToBottom=(action "onScrolledToBottom")
+    as |body|
+  }}
+    {{#if isLoading}}
+      {{#body.loader}}
+        {{table-loader}}
+      {{/body.loader}}
+    {{/if}}
+  {{/t.body}}
+
+{{/light-table}}
+```
+
+**app/components/simple-table.js:**
+```javascript
+import Component from '@ember/component';
+import TableCommon from '../mixins/table-common';
+import { computed } from '@ember/object';
+
+
+export default Component.extend(TableCommon, {
+  columns: computed(function() {
+    return [{
+      label: 'First Name',
+      valuePath: 'firstName',
+      width: '150px'
+    }, {
+      label: 'Last Name',
+      valuePath: 'lastName',
+      width: '150px'
+    }, {
+      label: 'Address',
+      valuePath: 'address'
+    }, {
+      label: 'State',
+      valuePath: 'state'
+    }, {
+      label: 'Country',
+      valuePath: 'country'
+    }];
+  })
+});
+```
+
 ## Generate an index route
+
+Of course a component itself is not going to render until it is being used
+somewhere.  So for this very simple example we build an index route that
+will render the component.
 
 ```console
 $ ember generate route index
@@ -199,6 +262,29 @@ installing route
 installing route-test
   create tests/unit/routes/index-test.js
 ```
+
+**app/templates/index.hbs:**
+```html
+<SimpleTable @model={{this.model}}/>
+
+{{outlet}}
+```
+
+**app/routes/index.js:**
+```javascript
+import Route from '@ember/routing/route';
+
+export default Route.extend({
+  model() {
+    return this.store.findAll('user');
+  }
+});
+```
+
+**Note:** *It looks like the light-table fetches rows from the model
+on demand, so performing a this.store.findAll() inside the route seems
+unnecessary.  It might be better to simply return a model without the
+findAll()*
 
 ## Generate a User Model
 
@@ -210,6 +296,24 @@ installing model-test
   create tests/unit/models/user-test.js
 ```
 
+**app/models/user.js:**
+```javascript
+import DS from 'ember-data';
+const { Model } = DS;
+
+export default Model.extend({
+      firstName: DS.attr(),
+      lastName: DS.attr(),
+      address: DS.attr(),
+      country: DS.attr(),
+      state: DS.attr(),
+      email: DS.attr(),
+      username: DS.attr(),
+      bio: DS.attr(),
+      color: DS.attr()
+});
+```
+
 ## Generate an adapter
 
 ```console
@@ -218,4 +322,130 @@ installing adapter
   create app/adapters/application.js
 installing adapter-test
   create tests/unit/adapters/application-test.js
+```
+
+**app/adapters/application.js:**
+```javascript
+import DS from 'ember-data';
+
+export default DS.JSONAPIAdapter.extend({
+  namespace: 'api'
+});
+```
+
+## Configure Mirage to work with our adapter
+
+This is the part that required the most effort.  It was not really explained
+in the examples exactly how the server side API was supposed to work.
+
+Basically we make an API that has the following behavior:
+
+```
+GET /api/users?dir={'asc','desc'}&limit={number}&page={number}&sort={string}
+```
+
+So there are a number of options that we need to pass to the API.  Here is
+how the API should handle them:
+
+- **dir**: This is the sort direction.  It should contain either 'asc', to
+           sort in ascending order, or 'desc', to sort in descending order.
+           This is optional, and defaults to 'asc'.
+- **sort**: This is the column name that should be sorted.  This is optional,
+            and if not supplied, the results will not be sorted.
+- **limit**: This is the maximum number of results to be returned.  This is
+             required or no results will be returned.
+- **page**: This determines the portion of the results to be returned.
+            In conjunction with the limit parameter, a 'page' of result rows
+            is determined with a page size = limit.  As far as I can tell,
+            the range of page numbers is [1, ... N].  This is required or no
+            results will be returned.
+
+**Note**: You may notice another parameter 'name'.  This can be used for filtering,
+but is not used by our light-table.
+
+**mirage/config.js:**
+```javascript
+import { dasherize } from '@ember/string';
+
+export default function() {
+  this.namespace = '/api';
+
+  let users = [
+    {
+        id: 46,
+        type: 'users',
+        attributes: {
+          'first-name': 'Abdiel',
+          'last-name': 'Dovie',
+          address: 'anywhere',
+          country: 'USA',
+          state: 'Iowa',
+          email: 'abdiel.dovie@gm.com',
+          username: 'adovie',
+          bio: 'whatever',
+          color: '#9C27B0'
+        }
+    },
+    {
+        id: 47,
+        type: 'users',
+        attributes: {
+          'first-name': 'Benny',
+          'last-name': 'Hill',
+          address: 'Porkshire Ln',
+          country: 'UK',
+          state: 'Wales',
+          email: 'bhill@gm.com',
+          username: 'bhill',
+          bio: 'whatever',
+          color: '#9C27B0'
+        }
+    }
+  ];
+
+  this.get('/users', function(db, request) {
+    let ret = null;
+    let qName = request.queryParams.name;
+
+    let sortAttr = request.queryParams.sort;
+
+    let dir = request.queryParams.dir !== undefined?request.queryParams.dir:'asc';
+
+    let [limit, page] = [request.queryParams.limit, request.queryParams.page];
+    let [start, stop] = [page - 1, page].map((i) => (limit * i));
+
+    if(qName !== undefined) {
+      ret = users.filter(function(i) {
+        return i.name.toLowerCase().indexOf(qName.toLowerCase()) !== -1;
+      });
+    }
+    else {
+      ret = users;
+    }
+
+    if (sortAttr !== undefined) {
+      sortAttr = dasherize(sortAttr);
+
+      if (dir === 'asc') {
+        ret = ret.sort((a, b) => ((a.attributes[sortAttr] > b.attributes[sortAttr]) -
+                                  (a.attributes[sortAttr] < b.attributes[sortAttr])));
+      }
+      else {
+        ret = ret.sort((a, b) => ((a.attributes[sortAttr] < b.attributes[sortAttr]) -
+                                  (a.attributes[sortAttr] > b.attributes[sortAttr])));
+      }
+    }
+
+    if (start >= 0 && stop > start) {
+      return {data: ret.slice(start, stop)};
+    }
+    else {
+      return {data: []};
+    }
+  });
+
+  this.get('/users/:id', function (db, request) {
+    return users.find((user) => request.params.id === user.id);
+  });
+}
 ```
