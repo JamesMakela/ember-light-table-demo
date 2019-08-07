@@ -44,7 +44,14 @@ export default Mixin.create({
   },
 
   fetchRecords: task(function*() {
-    let records = yield this.get('store').query('user', this.getProperties(['page', 'limit', 'sort', 'dir']));
+    let records = yield this.get('store').query(
+      'user',
+      this.getProperties(['page',
+                          'limit',
+                          'sort',
+                          'dir'])
+    );
+
     this.get('data').pushObjects(records.toArray());
     this.set('meta', records.get('meta'));
     this.set('canLoadMore', !isEmpty(records));
